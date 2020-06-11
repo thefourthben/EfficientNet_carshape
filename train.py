@@ -8,30 +8,34 @@ from torchvision import transforms, models
 import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn.functional as F
-from models.effnet import EfficientNet as eff
-from earlystop import EarlyStopping as early 
+from model.eff import EfficientNet as eff
+from model import utils
 import torch.onnx
 import onnx
 import onnxruntime
 from PIL import Image
-from models import utils
 from time import process_time
+from datasets import testdataset, traindataset, valdataset
 
 class training():
     def __init__(self, model):
+        self.transform_train = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
         self.lr = 0.01
-        self.trainset = None
+        self.trainset = traindataset.traindataset(self.transform_train)
         self.trainloader = None
-        self.valset = None
+        self.valset = valdataset.valdataset(self.transform_train)
         self.valloader = None
-        self.testset = None
+        self.testset = testdataset.testdataset(self.transform_train)
         self.testloader = None
         self.whichmodel = model
-        self.n_epoch = 1
+        self.n_epoch = 6
         self.loss = t.nn.CrossEntropyLoss()
         self.factor = 0.5
-        self.classes = ('plane', 'car', 'bird', 'cat', 'deer',
-               'dog', 'frog', 'horse', 'ship', 'truck')
+        self.classes = ("bike", "motocycles", "car", "van", "truck", "trailer")
         self.block = [ 
             utils.BlockArgs(kernel_size=3, num_repeat=1, input_filters=32, output_filters=16, expand_ratio=1, id_skip=True, stride=[1, 1], se_ratio=0.25),
             utils.BlockArgs(kernel_size=3, num_repeat=2, input_filters=16, output_filters=24, expand_ratio=6, id_skip=True, stride=[2, 2], se_ratio=0.25),
@@ -46,8 +50,7 @@ class training():
             depth_coefficient=1.0,
             image_size=224,
             dropout_rate=0.2,
-
-            num_classes=10,
+            num_classes=6,
             batch_norm_momentum=0.99,
             batch_norm_epsilon=1e-3,
             drop_connect_rate=0.2,
@@ -56,35 +59,29 @@ class training():
             )
 
     def preproc(self):
-        transform_train = transforms.Compose([
-            transforms.Resize((224)),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])
+        # Configuring the weights
+        class_count = self.trainset.getnumclasses()
+        num_samples = sum(class_count) * 0.9
+        class_weights = [num_samples/class_count[i] for i in range(len(class_count))]
+        weights = [class_weights[self.trainset.class_labels[i]] for i in range(int(num_samples))]
+        sampler = t.utils.data.sampler.WeightedRandomSampler(weights, int(num_samples), replacement=False)
 
         # Loading and getting the trainset
-        self.trainset = tv.CIFAR10(root='./data', train=True,
-                            download=True, transform=transform_train)
-        length = int(len(self.trainset) * 0.9)
-        self.trainset, self.valset = t.utils.data.random_split(self.trainset, [length, len(self.trainset) - length])
-        self.trainloader = t.utils.data.DataLoader(self.trainset, batch_size=16,
-                                            shuffle=True, num_workers=2)
-        
-        # Creating validation loader
-        self.valloader = t.utils.data.DataLoader(self.valset, batch_size=8, shuffle=True, num_workers=2)
+        self.trainloader = t.utils.data.DataLoader(self.trainset,batch_size=64,
+        num_workers=2, sampler = sampler)
+        self.valloader = t.utils.data.DataLoader(self.valset, batch_size=64,
+        num_workers=2, shuffle=True)
 
         # Creating and loading the test set
-        self.testset = tv.CIFAR10(root='./data', train=False,
-                            download=True, transform=transform_train)
-        self.testloader = t.utils.data.DataLoader(self.testset, batch_size=16,
-                                            shuffle=True, num_workers=2)
+        self.testloader = t.utils.data.DataLoader(self.testset, batch_size=64, 
+        num_workers=2, shuffle=False)
 
     def train(self):
         self.preproc()
         # Getting the Model
         model = self.whichmodel(blocks_args=self.block, global_params=self.globalparm)
         # utils.load_pretrained_weights(model, "efficientnet-b0", load_fc=False)
-        utils.load_pretrained_weights(model, "efficientnet-b7", load_fc=False)
+        utils.load_pretrained_weights(model, "efficientnet-b0", load_fc=False)
         # Unfreezing the model parameters
         for param in model.parameters():
             param.requires_grad = True
@@ -105,8 +102,9 @@ class training():
             lm.reset()
             total = 0
             correct = 0
-            train_loss = 0 
-            for data, label in enumerate(self.trainloader):
+            train_loss = 0
+            confusion_matrix = torch.zeros(6, 6)
+            for i, (data, label) in enumerate(self.trainloader):
                 inputs = Variable(data).cuda()
                 target = Variable(label).cuda()
                 # zero the parameter gradients
@@ -121,7 +119,9 @@ class training():
                 _, predicted = outputs.max(1)
                 total += target.size(0)
                 correct += predicted.eq(target).sum().item()
-            val_acc, val_loss = self.val(model, self.valloader)
+                for tasd, p in zip(target.view(-1), predicted.view(-1)):
+                    confusion_matrix[tasd.long(), p.long()] += 1
+            val_acc, val_loss, _ = self.val(model, self.valloader)
             print('Epoch: {epoch} | Train Loss: {loss} | Train Acc: {train_acc} | Val Loss: {val_loss} |Val Acc: {val_acc}'.format(
                 epoch = num, 
                 loss = lm.value()[0],
@@ -129,11 +129,12 @@ class training():
                 val_acc = val_acc,
                 val_loss = val_loss, 
             ) )
+            print(confusion_matrix)
             scheduler.step(val_acc)
-            early(val_acc, model)
-        final_acc, _= self.val(model, self.testloader)
-        print("Finished Training! The result is: {res}".format(
-            res = final_acc
+        final_acc, _, cm= self.val(model, self.testloader, True)
+        print("Finished Training! The result is: {res} | Confusion matrix:\n {cm}".format(
+            res = final_acc,
+            cm = cm
         ))
         self.savemodel(model, self.lr, 100, self.factor ,"Adam", "Plat", self.n_epoch)
         w = t.randn(1, 3, 224, 224).cuda()
@@ -142,12 +143,13 @@ class training():
         self.onnxconversion()
 
 
-    def val(self, model, dataloader):
+    def val(self, model, dataloader, test=False):
         model.cuda()
         model.eval()
         correct = 0
         total = 0
         l = 0
+        confusion_matrix = torch.zeros(6, 6)
         with t.no_grad():
             for n, (inputs, label) in enumerate(dataloader):
                 inputs, target = Variable(inputs).cuda(), Variable(label.long()).cuda()
@@ -156,37 +158,42 @@ class training():
                 _, predicted = t.max(score.data, 1)
                 total += target.size(0)
                 correct += (predicted == target).sum().item()
-        return (100 * correct/total), l
+                if test:
+                    for tasd, p in zip(target.view(-1), predicted.view(-1)):
+                        confusion_matrix[tasd.long(), p.long()] += 1
+        return (100 * correct/total), l, confusion_matrix
     
     def onnxconversion(self):
-        img = Image.open('airplane.jpg')
-        transform_train = transforms.Compose([
-            transforms.Resize((224)),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])        
-        img = transform_train(img)
-        img = img.view(1, 3, 224, 224)
-        onnx_model =  onnx.load("result.onnx")
+        onnx_model = onnx.load("result.onnx")
         onnx.checker.check_model(onnx_model)
         ort = onnxruntime.InferenceSession("result.onnx")
-        def to_numpy(tensor):
-            return tensor.detach().cpu().numpy()
-        # compute ONNX Runtime output prediction
-        ort_inputs = {ort.get_inputs()[0].name: to_numpy(img)}
-        t0 = process_time()
-        ort_outs = ort.run(None, ort_inputs)
-        t1 = process_time()
+        correct = 0
         result = list(self.classes)
-        print("Predicted result: {pres} | Actual Result: {ares} | Time Spent: {ts}".format(
-                ares=result[0], 
-                pres=result[ort_outs.index(max(ort_outs))], 
-                ts=t1 - t0
+        confusion_matrix = torch.zeros(6, 6)
+        def to_numpy(imga):
+            return imga.detach().cpu().numpy()
+        res = []
+        a = len(self.testset)
+        t0 = process_time()
+        for i in range(a):
+            img = self.transform_train(Image.open(self.testset.imgs[i]))
+            img = img.view(1, 3, 224, 224)
+            # compute ONNX Runtime output prediction
+            ort_inputs = {ort.get_inputs()[0].name: to_numpy(img)}
+            ort_outs = ort.run(None, ort_inputs)
+            correct += (np.argmax(ort_outs) == self.testset.class_labels[i]).sum().item()
+            res.append(np.argmax(ort_outs))
+            if len(res) % a == (a-1):
+                for tasd, p in zip(t.Tensor(self.testset.class_labels).view(-1), t.Tensor(res).view(-1)):
+                    confusion_matrix[tasd.long(), p.long()] += 1
+                res = []
+        t1 = process_time()
+        print("Onnx Accuracy: {acc}| Time Spent: {ts} | Confusion Matrix: \n {cm}".format(
+                acc=100*(correct / len(self.testset)),
+                ts=t1 - t0,
+                cm=confusion_matrix
         ))
-        
-
-        # compare ONNX Runtime and PyTorch results
-        # print("airplane", )
+    
     
     def savemodel(self, model, lr, batch, f, op, de, ep):
         t.save(model.state_dict(), "l{lr}_b{ba}_f{f}_o{o}_d{d}_e{e}".format(
