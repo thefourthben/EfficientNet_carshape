@@ -40,7 +40,7 @@ from torch.utils import model_zoo
 GlobalParams = collections.namedtuple('GlobalParams', [
     'width_coefficient', 'depth_coefficient', 'image_size', 'dropout_rate',
     'num_classes', 'batch_norm_momentum', 'batch_norm_epsilon',
-    'drop_connect_rate', 'depth_divisor', 'min_depth'])
+    'drop_connect_rate', 'depth_divisor', 'min_depth', 'use_se', 'local_pooling'])
 
 # Parameters for an individual model block
 BlockArgs = collections.namedtuple('BlockArgs', [
@@ -76,8 +76,7 @@ class MemoryEfficientSwish(nn.Module):
     def forward(self, x):
         return SwishImplementation.apply(x)
 
-
-def round_filters(filters, global_params):
+def round_filters(filters, global_params, skip = False):
     """Calculate and round number of filters based on width multiplier.
        Use width_coefficient, depth_divisor and min_depth of global_params.
     Args:
@@ -87,7 +86,7 @@ def round_filters(filters, global_params):
         new_filters: New filters number after calculating.
     """
     multiplier = global_params.width_coefficient
-    if not multiplier:
+    if skip or not multiplier:
         return filters
     # TODO: modify the params names.
     #       maybe the names (width_divisor,min_width)
@@ -103,7 +102,7 @@ def round_filters(filters, global_params):
     return int(new_filters)
 
 
-def round_repeats(repeats, global_params):
+def round_repeats(repeats, global_params, skip = False):
     """Calculate module's repeat number of a block based on depth multiplier.
        Use depth_coefficient of global_params.
     Args:
@@ -113,7 +112,7 @@ def round_repeats(repeats, global_params):
         new repeat: New repeat number after calculating.
     """
     multiplier = global_params.depth_coefficient
-    if not multiplier:
+    if skip or not multiplier:
         return repeats
     # follow the formula transferred from official TensorFlow implementation
     return int(math.ceil(multiplier * repeats))
@@ -495,6 +494,7 @@ def efficientnet(width_coefficient=None, depth_coefficient=None, image_size=None
         drop_connect_rate=drop_connect_rate,
         depth_divisor=8,
         min_depth=None,
+        use_se=True
     )
 
     return blocks_args, global_params
@@ -526,6 +526,7 @@ def get_model_params(model_name, override_params):
 url_map = {
     'efficientnet-b0': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b0-355c32eb.pth',
     'efficientnet-b7': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b7-dcc49843.pth',
+    'efficientnet-b3': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b3-5fb5a3c3.pth',
 }
 
 # train with Adversarial Examples(AdvProp)

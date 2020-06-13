@@ -39,7 +39,7 @@ class MBConvBlock(nn.Module):
         self._block_args = block_args
         self._bn_mom = 1 - global_params.batch_norm_momentum # pytorch's difference from tensorflow
         self._bn_eps = global_params.batch_norm_epsilon
-        self.has_se = (self._block_args.se_ratio is not None) and (0 < self._block_args.se_ratio <= 1)
+        self.has_se = global_params.use_se and (self._block_args.se_ratio is not None) and (0 < self._block_args.se_ratio <= 1)
         self.id_skip = block_args.id_skip  # whether to use skip connection and drop connect
 
         # Expansion phase (Inverted Bottleneck)
@@ -73,7 +73,8 @@ class MBConvBlock(nn.Module):
         Conv2d = get_same_padding_conv2d(image_size=image_size)
         self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
         self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
-        self._swish = MemoryEfficientSwish()
+        # Swapped with ReLu6 for efficientnet lite implementation
+        self._swish = torch.nn.ReLU6()
 
     def forward(self, inputs, drop_connect_rate=None):
         """MBConvBlock's forward function.
@@ -195,7 +196,8 @@ class EfficientNet(nn.Module):
         self._avg_pooling = nn.AdaptiveAvgPool2d(1)
         self._dropout = nn.Dropout(self._global_params.dropout_rate)
         self._fc = nn.Linear(out_channels, self._global_params.num_classes)
-        self._swish = MemoryEfficientSwish()
+        # Swapped Swish with ReLu6 for implementing Efficient Net lite
+        self._swish = torch.nn.ReLU6()
 
     def set_swish(self, memory_efficient=True):
         """Sets swish function as memory efficient (for training) or standard (for export).
@@ -242,11 +244,13 @@ class EfficientNet(nn.Module):
 
         # Convolution layers
         x = self.extract_features(inputs)
-
+    
         # Pooling and final linear layer
         x = self._avg_pooling(x)
         x = x.view(bs, -1)
         x = self._dropout(x)
+        if self._global_params.local_pooling:
+            x = torch.squeeze(x)
         x = self._fc(x)
 
         return x

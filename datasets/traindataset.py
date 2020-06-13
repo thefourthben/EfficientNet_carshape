@@ -16,7 +16,7 @@ class traindataset(Dataset):
         self.trans = trans
         f = [i for i in os.listdir(self.path)]
         for i in f:
-            cat = i[-5]
+            cat = i[-6]
             self.label.append((i, cat))
             self.class_labels.append(int(cat))
             self.imgs.append(os.path.join(self.path, i))
