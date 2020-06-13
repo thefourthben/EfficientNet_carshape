@@ -74,7 +74,8 @@ class MBConvBlock(nn.Module):
         self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
         self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
         # Swapped with ReLu6 for efficientnet lite implementation
-        self._swish = torch.nn.ReLU6()
+        self._swish = MemoryEfficientSwish()
+        # self._swish = torch.nn.ReLU6()
 
     def forward(self, inputs, drop_connect_rate=None):
         """MBConvBlock's forward function.
@@ -193,11 +194,12 @@ class EfficientNet(nn.Module):
         self._bn1 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
 
         # Final linear layer
-        self._avg_pooling = nn.AdaptiveAvgPool2d(1)
+        self._avg_pooling = nn.AdaptiveAvgPool2d(1)ß
         self._dropout = nn.Dropout(self._global_params.dropout_rate)
         self._fc = nn.Linear(out_channels, self._global_params.num_classes)
         # Swapped Swish with ReLu6 for implementing Efficient Net lite
-        self._swish = torch.nn.ReLU6()
+        self._swish = MemoryEfficientSwish()ß
+        # self._swish = torch.nn.ReLU6()
 
     def set_swish(self, memory_efficient=True):
         """Sets swish function as memory efficient (for training) or standard (for export).

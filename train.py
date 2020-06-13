@@ -57,11 +57,11 @@ class training():
             num_classes=6,
             batch_norm_momentum=0.99,
             batch_norm_epsilon=1e-3,
-            drop_connect_rate=0.2,
+            drop_connect_rate=0.5,
             depth_divisor=8,
             min_depth=None,
-            use_se=False,
-            local_pooling=True
+            use_se=True,
+            local_pooling=False
             )
 
     def preproc(self):
@@ -95,7 +95,7 @@ class training():
         
         # Getting pretrained models and weights
         # utils.load_pretrained_weights(model, "efficientnet-b0", load_fc=False)
-        # utils.load_pretrained_weights(model, "efficientnet-b3", load_fc=False)
+        utils.load_pretrained_weights(model, "efficientnet-b3", load_fc=False)
         
         # Unfreezing the model parameters
         for param in model.parameters():
